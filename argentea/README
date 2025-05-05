@@ -1,0 +1,6 @@
+This repository contains dataset of Myristica argentea research which publicly available in https://www.biorxiv.org/content/10.1101/2025.02.05.636754v1
+
+Dataset contains:
+1. Database of samples used in the study
+2. Files used for SECAPR 2.2 analysis (map_snp_arg.sh, namelist.txt, parallel*.txt)
+3. Script to run SECAPR analysis
