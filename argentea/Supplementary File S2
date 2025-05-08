@@ -1,0 +1,185 @@
+Script used for cpDNA analysis
+
+1. Preparation step
+#### Repository and direction
+path_to_dir_in="./path to your data "; ############ To be modified
+path_to_dir_out="./path to your output "; ############ To be modified
+path_to_tmp="/scratch/yourjobname-$JOB_ID/" 
+ 
+#### Temporary directory on your preferred nodes
+echo "Data transfer from master dir to  -> yournode";
+mkdir $path_to_tmp
+scp -rp nas3:/$path_to_dir_in/* $path_to_tmp
+echo "Finised";
+
+#### Open the temporary folder
+cd $path_to_tmp
+
+
+#### Quality control with FastQC
+echo " Quality control with FastQC ";
+
+for i in *.fastq
+do
+fastqc $i
+done
+
+scp -rp $path_to_tmp/*fastqc* nas3:/$path_to_dir_out/fastqc
+echo "Finished";
+
+
+#### Demultiplexing with demultadapt.py
+echo " Demultiplexing with demultadapt.py";
+
+for i in *R1.fastq
+do
+echo $i
+python2.7 demultadapt.py -f $i -p Demul-RunX-R1 FILE_ADAPT ############ Modify your RunX
+done
+
+r#m *noindex.fastq
+
+echo "Finished";
+
+
+#### Elimination adapters with Cutadapt
+echo " Elimination adapters with Cutadapt ";
+
+for i in Demul-*
+do 
+echo $i
+/usr/local/cutadapt-1.2.1/bin/cutadapt $(<adapteurs.conf) -o Cutadapt-$i $i
+done
+
+for i in *R2.fastq
+do 
+echo $i
+/usr/local/cutadapt-1.2.1/bin/cutadapt $(<adapteurs.conf) -o Cutadapt-$i $i
+done
+
+#rm Run*.fastq
+#rm Demul-*
+
+echo "Finished";
+
+
+#### Filtering using Filter
+echo " Filtering using Filter ";
+
+for i in Cutadapt*.fastq
+do
+echo $i
+perl Filter.pl -f $i  -o Filter-$i
+done
+
+#rm Cutadapt*.fastq
+
+echo "Finished";
+
+
+#### Pairing R1 and R2 using Compare
+echo " Pairing R1 and R2 using Compare ";
+
+for i in Filter-Cutadapt-Demul*.fastq
+do 
+echo $i
+perl Compare.pl -f $i -r Filter-Cutadapt-RunX-R2.fastq -of Paired-$i -or R2-Paired-$i -os Single-$i  ############ Modifier RunX
+rm Single*
+done
+
+#rm Filter*
+echo "Finished";
+
+2. Mapping step
+
+#### Mapping to your chloroplast reference using BWA
+echo " Mapping to your chloroplast reference using BWA ";
+
+echo "Indexing";
+bwa index REF.fasta
+
+echo "MEM";
+for i in Paired-*.fastq
+do
+echo $i
+bwa mem REF.fasta -M -B 4 $i R2-$i > Sam-$i.sam
+done
+
+echo "Finished";
+
+
+#### Elimination non read map using Samtools view
+echo " Elimination non read map using Samtools view ";
+
+for i in *.sam
+do 
+echo $i
+samtools view -h -b -S -f 0x2 $i -o $i.bam
+done
+
+echo "Finished";
+
+
+#### Sorting using Samtools sort
+echo " Sorting using Samtools sort ";
+
+for i in *.bam
+do 
+echo $i
+samtools sort $i -T TEMP-$i -o Sort-$i
+done
+#rm Sam*
+
+echo "Finished";
+
+
+#### Simplification des noms de fichiers
+echo "Simplification des noms de fichiers";
+
+for i in Sort*
+do
+echo $i
+mv $i Chloro_${i#Sort-Sam-Paired-Filter-Cutadapt-Demul-}
+done
+
+for i in Chloro*
+do
+echo $i
+mv $i ${i%fastq.sam.bam}bam
+done 
+
+echo "Finished";
+
+
+#### Concatenation with Tar
+mkdir RunX_Bam_Chloro/ ############ Modify your RunX
+
+echo "Deplacement";
+for i in Chloro*
+do
+mv $i RunX_Bam_Chloro/ ############ Modify your RunX
+done
+
+echo "Concatenation with Tar";
+tar -zcvf  RunX_Bam_Chloro.tar.gz RunX_Bam_Chloro/ ############ Modify your RunX echo "Finished";
+
+3. Calling step
+tar -xzf RunX_Bam_Chloro.tar.gz ############ Modify your RunX
+mv RunX_Bam_Chloro/* $path_to_tmp ############ Modify your RunX
+
+samtools faidx REF.fasta
+echo "Finished";
+
+#### Calling SNP using Samtools mpileup
+echo " Calling SNP using Samtools mpileup ";
+samtools mpileup -B -Q 30 -C 50 -q 30 -d 20000 -f fragrans.fasta -D *.bam > Calling_Normal_Fragrans.mpileup 
+echo "Finished";
+
+scp Calling_Chloro.mpileup nas3:/$path_to_dir_out/
+
+#### Conversion in .vcf with Varscan
+echo " Conversion in .vcf with Varscan ";
+java -jar VarScan.v2.3.7.jar mpileup2snp Calling_Normal_Fragrans.mpileup --min-var-freq 0.5 --min-avg-qual 30 --min-freq-for-hom 0.5 --output-vcf 1 --min-coverage 3 --strand-filter 0 --vcf-sample-list Name.txt > Calling_Normal.vcf 
+echo "Finished";
+
+scp Calling_Chloro.vcf nas3:/$path_to_dir_out/
